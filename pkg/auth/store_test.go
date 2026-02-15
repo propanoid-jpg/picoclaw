@@ -3,6 +3,7 @@ package auth
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -53,8 +54,13 @@ func TestAuthCredentialNeedsRefresh(t *testing.T) {
 func TestStoreRoundtrip(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("USERPROFILE", tmpDir) // Windows uses USERPROFILE
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	}()
 
 	cred := &AuthCredential{
 		AccessToken:  "test-access-token",
@@ -88,10 +94,20 @@ func TestStoreRoundtrip(t *testing.T) {
 }
 
 func TestStoreFilePermissions(t *testing.T) {
+	// Skip on Windows - file permissions work differently there
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Unix file permission test on Windows")
+	}
+
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("USERPROFILE", tmpDir) // Windows uses USERPROFILE
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	}()
 
 	cred := &AuthCredential{
 		AccessToken: "secret-token",
@@ -116,8 +132,13 @@ func TestStoreFilePermissions(t *testing.T) {
 func TestStoreMultiProvider(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("USERPROFILE", tmpDir) // Windows uses USERPROFILE
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	}()
 
 	openaiCred := &AuthCredential{AccessToken: "openai-token", Provider: "openai", AuthMethod: "oauth"}
 	anthropicCred := &AuthCredential{AccessToken: "anthropic-token", Provider: "anthropic", AuthMethod: "token"}
@@ -149,8 +170,13 @@ func TestStoreMultiProvider(t *testing.T) {
 func TestDeleteCredential(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("USERPROFILE", tmpDir) // Windows uses USERPROFILE
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	}()
 
 	cred := &AuthCredential{AccessToken: "to-delete", Provider: "openai", AuthMethod: "oauth"}
 	if err := SetCredential("openai", cred); err != nil {
@@ -173,8 +199,13 @@ func TestDeleteCredential(t *testing.T) {
 func TestLoadStoreEmpty(t *testing.T) {
 	tmpDir := t.TempDir()
 	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
 	t.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	t.Setenv("USERPROFILE", tmpDir) // Windows uses USERPROFILE
+	defer func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	}()
 
 	store, err := LoadStore()
 	if err != nil {

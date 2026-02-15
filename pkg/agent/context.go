@@ -105,6 +105,39 @@ Your workspace is at: %s
 		now, runtime, workspacePath, workspacePath, workspacePath, workspacePath, toolsSection, workspacePath)
 }
 
+// extractPeerName extracts a human-readable peer name from channel metadata.
+// Different channels provide different fields, so we try them in priority order.
+func extractPeerName(metadata map[string]string) string {
+	if metadata == nil {
+		return ""
+	}
+
+	// Priority order for name extraction:
+	// 1. display_name (Discord) - most friendly
+	// 2. sender_name (DingTalk)
+	// 3. user_name (WhatsApp)
+	// 4. first_name (Telegram)
+	// 5. username (Telegram, Discord) - least friendly but still useful
+
+	if name := metadata["display_name"]; name != "" {
+		return name
+	}
+	if name := metadata["sender_name"]; name != "" {
+		return name
+	}
+	if name := metadata["user_name"]; name != "" {
+		return name
+	}
+	if name := metadata["first_name"]; name != "" {
+		return name
+	}
+	if name := metadata["username"]; name != "" {
+		return name
+	}
+
+	return ""
+}
+
 func (cb *ContextBuilder) buildToolsSection() string {
 	if cb.tools == nil {
 		return ""
@@ -277,14 +310,24 @@ func (cb *ContextBuilder) buildUserMessage(text string, mediaPaths []string) pro
 	}
 }
 
-func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string) []providers.Message {
+func (cb *ContextBuilder) BuildMessages(history []providers.Message, summary string, currentMessage string, media []string, channel, chatID string, metadata map[string]string) []providers.Message {
 	messages := []providers.Message{}
 
 	systemPrompt := cb.BuildSystemPromptWithBudget(cb.budget)
 
 	// Add Current Session info if provided
 	if channel != "" && chatID != "" {
-		systemPrompt += fmt.Sprintf("\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+		sessionInfo := fmt.Sprintf("\n\n## Current Session\nChannel: %s\nChat ID: %s", channel, chatID)
+
+		// Extract peer name from metadata (channel-agnostic)
+		if metadata != nil {
+			peerName := extractPeerName(metadata)
+			if peerName != "" {
+				sessionInfo += fmt.Sprintf("\nPeer: %s", peerName)
+			}
+		}
+
+		systemPrompt += sessionInfo
 	}
 
 	// Log system prompt summary for debugging (debug mode only)

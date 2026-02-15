@@ -148,7 +148,10 @@ func TestClaudeProvider_ChatRoundTrip(t *testing.T) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer test-token" {
+		// Anthropic SDK uses x-api-key header
+		apiKey := r.Header.Get("x-api-key")
+		if apiKey != "test-token" {
+			t.Logf("API key mismatch: got %q, want %q", apiKey, "test-token")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

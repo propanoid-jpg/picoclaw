@@ -17,7 +17,7 @@ func (m *MockLLMProvider) Chat(ctx context.Context, messages []providers.Message
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			return &providers.LLMResponse{
-				Content: "Task completed: " + messages[i].Content,
+				Content: "Task completed: " + messages[i].GetTextContent(),
 			}, nil
 		}
 	}

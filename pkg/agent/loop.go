@@ -52,16 +52,17 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey         string   // Session identifier for history/context
-	Channel            string   // Target channel for tool execution
-	ChatID             string   // Target chat ID for tool execution
-	UserMessage        string   // User message content (may include prefix)
-	Media              []string // Media file paths (images, audio, etc.)
-	DefaultResponse    string   // Response when LLM returns empty
-	EnableSummary      bool     // Whether to trigger summarization
-	SendResponse       bool     // Whether to send response via bus
-	NoHistory          bool     // If true, don't load session history (for heartbeat)
-	DisableMessageTool bool     // If true, message tool won't send messages (for heartbeat)
+	SessionKey         string            // Session identifier for history/context
+	Channel            string            // Target channel for tool execution
+	ChatID             string            // Target chat ID for tool execution
+	UserMessage        string            // User message content (may include prefix)
+	Media              []string          // Media file paths (images, audio, etc.)
+	Metadata           map[string]string // Channel-specific metadata (username, display_name, etc.)
+	DefaultResponse    string            // Response when LLM returns empty
+	EnableSummary      bool              // Whether to trigger summarization
+	SendResponse       bool              // Whether to send response via bus
+	NoHistory          bool              // If true, don't load session history (for heartbeat)
+	DisableMessageTool bool              // If true, message tool won't send messages (for heartbeat)
 }
 
 // createToolRegistry creates a tool registry with common tools.
@@ -289,6 +290,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		ChatID:          msg.ChatID,
 		UserMessage:     msg.Content,
 		Media:           msg.Media,
+		Metadata:        msg.Metadata,
 		DefaultResponse: "I've completed processing but have no response to give.",
 		EnableSummary:   true,
 		SendResponse:    false,
@@ -394,6 +396,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		opts.Media,
 		opts.Channel,
 		opts.ChatID,
+		opts.Metadata,
 	)
 
 	// 5. Save user message to session
