@@ -203,7 +203,7 @@ func TestClaudeProvider_GetDefaultModel(t *testing.T) {
 
 func createAnthropicTestClient(baseURL, token string) *anthropic.Client {
 	c := anthropic.NewClient(
-		anthropicoption.WithAuthToken(token),
+		anthropicoption.WithAPIKey(token),
 		anthropicoption.WithBaseURL(baseURL),
 	)
 	return &c

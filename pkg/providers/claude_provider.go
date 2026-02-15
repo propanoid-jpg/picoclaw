@@ -17,7 +17,7 @@ type ClaudeProvider struct {
 
 func NewClaudeProvider(token string) *ClaudeProvider {
 	client := anthropic.NewClient(
-		option.WithAuthToken(token),
+		option.WithAPIKey(token),
 		option.WithBaseURL("https://api.anthropic.com"),
 	)
 	return &ClaudeProvider{client: &client}
@@ -36,7 +36,7 @@ func (p *ClaudeProvider) Chat(ctx context.Context, messages []Message, tools []T
 		if err != nil {
 			return nil, fmt.Errorf("refreshing token: %w", err)
 		}
-		opts = append(opts, option.WithAuthToken(tok))
+		opts = append(opts, option.WithAPIKey(tok))
 	}
 
 	params, err := buildClaudeParams(messages, tools, model, options)

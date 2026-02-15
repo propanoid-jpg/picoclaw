@@ -34,7 +34,9 @@ type AgentLoop struct {
 	provider       providers.LLMProvider
 	workspace      string
 	model          string
-	contextWindow  int // Maximum context window size in tokens
+	maxTokens      int     // Maximum output tokens per request
+	temperature    float64 // Temperature for LLM sampling
+	contextWindow  int     // Maximum context window size in tokens
 	maxIterations  int
 	sessions       *session.SessionManager
 	state          *state.Manager
@@ -139,6 +141,8 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		provider:       provider,
 		workspace:      workspace,
 		model:          cfg.Agents.Defaults.Model,
+		maxTokens:      cfg.Agents.Defaults.MaxTokens,
+		temperature:    cfg.Agents.Defaults.Temperature,
 		contextWindow:  cfg.Agents.Defaults.MaxTokens, // Restore context window for summarization
 		maxIterations:  cfg.Agents.Defaults.MaxToolIterations,
 		sessions:       sessionsManager,
@@ -432,8 +436,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				"model":             al.model,
 				"messages_count":    len(messages),
 				"tools_count":       len(providerToolDefs),
-				"max_tokens":        8192,
-				"temperature":       0.7,
+				"max_tokens":        al.maxTokens,
+				"temperature":       al.temperature,
 				"system_prompt_len": len(messages[0].Content),
 			})
 
@@ -447,8 +451,8 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 		// Call LLM
 		response, err := al.provider.Chat(ctx, messages, providerToolDefs, al.model, map[string]interface{}{
-			"max_tokens":  8192,
-			"temperature": 0.7,
+			"max_tokens":  al.maxTokens,
+			"temperature": al.temperature,
 		})
 
 		if err != nil {
@@ -491,8 +495,10 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 		for _, tc := range response.ToolCalls {
 			argumentsJSON, _ := json.Marshal(tc.Arguments)
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, providers.ToolCall{
-				ID:   tc.ID,
-				Type: "function",
+				ID:        tc.ID,
+				Type:      "function",
+				Name:      tc.Name,      // Also set at top level for Anthropic
+				Arguments: tc.Arguments, // Also set at top level for Anthropic
 				Function: &providers.FunctionCall{
 					Name:      tc.Name,
 					Arguments: string(argumentsJSON),
