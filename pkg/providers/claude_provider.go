@@ -56,42 +56,102 @@ func (p *ClaudeProvider) GetDefaultModel() string {
 	return "claude-sonnet-4-5-20250929"
 }
 
+// convertContentToAnthropicBlocks converts MessageContent to Anthropic content blocks
+func convertContentToAnthropicBlocks(content MessageContent) []anthropic.ContentBlockParamUnion {
+	var blocks []anthropic.ContentBlockParamUnion
+
+	switch v := content.(type) {
+	case string:
+		// Simple text content
+		blocks = append(blocks, anthropic.NewTextBlock(v))
+	case []ContentBlock:
+		// Structured content with text and/or images
+		for _, block := range v {
+			switch block.Type {
+			case "text":
+				blocks = append(blocks, anthropic.NewTextBlock(block.Text))
+			case "image":
+				if block.Source != nil {
+					blocks = append(blocks, anthropic.NewImageBlockBase64(
+						block.Source.MediaType,
+						block.Source.Data,
+					))
+				}
+			}
+		}
+	default:
+		// Fallback to empty text block if unknown type
+		blocks = append(blocks, anthropic.NewTextBlock(""))
+	}
+
+	return blocks
+}
+
 func buildClaudeParams(messages []Message, tools []ToolDefinition, model string, options map[string]interface{}) (anthropic.MessageNewParams, error) {
 	var system []anthropic.TextBlockParam
 	var anthropicMessages []anthropic.MessageParam
 
+	// Track if we should enable prompt caching (only for supported models)
+	enableCaching := false
+	if val, ok := options["enable_prompt_caching"]; ok {
+		if b, ok := val.(bool); ok {
+			enableCaching = b
+		}
+	}
+
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
-			system = append(system, anthropic.TextBlockParam{Text: msg.Content})
+			// System messages are always text
+			textContent := msg.GetTextContent()
+			block := anthropic.TextBlockParam{
+				Text: textContent,
+			}
+
+			// Enable caching for system blocks if requested
+			// Cache the main system prompt but not the last block (which may be dynamic memory)
+			if enableCaching && len(system) > 0 {
+				// Mark previous block as cacheable
+				cacheControl := anthropic.NewCacheControlEphemeralParam()
+				system[len(system)-1].CacheControl = cacheControl
+			}
+
+			system = append(system, block)
 		case "user":
 			if msg.ToolCallID != "" {
+				// Tool result - always text
+				textContent := msg.GetTextContent()
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, textContent, false)),
 				)
 			} else {
+				// User message - can have text + images
+				blocks := convertContentToAnthropicBlocks(msg.Content)
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewUserMessage(blocks...),
 				)
 			}
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
 				var blocks []anthropic.ContentBlockParamUnion
-				if msg.Content != "" {
-					blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+				textContent := msg.GetTextContent()
+				if textContent != "" {
+					blocks = append(blocks, anthropic.NewTextBlock(textContent))
 				}
 				for _, tc := range msg.ToolCalls {
 					blocks = append(blocks, anthropic.NewToolUseBlock(tc.ID, tc.Arguments, tc.Name))
 				}
 				anthropicMessages = append(anthropicMessages, anthropic.NewAssistantMessage(blocks...))
 			} else {
+				textContent := msg.GetTextContent()
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewAssistantMessage(anthropic.NewTextBlock(msg.Content)),
+					anthropic.NewAssistantMessage(anthropic.NewTextBlock(textContent)),
 				)
 			}
 		case "tool":
+			textContent := msg.GetTextContent()
 			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+				anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, textContent, false)),
 			)
 		}
 	}

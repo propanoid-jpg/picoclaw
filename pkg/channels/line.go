@@ -51,10 +51,11 @@ type LINEChannel struct {
 	quoteTokens    sync.Map // chatID -> quoteToken (string)
 	ctx            context.Context
 	cancel         context.CancelFunc
+	workspace      string
 }
 
 // NewLINEChannel creates a new LINE channel instance.
-func NewLINEChannel(cfg config.LINEConfig, messageBus *bus.MessageBus) (*LINEChannel, error) {
+func NewLINEChannel(cfg config.LINEConfig, messageBus *bus.MessageBus, workspace string) (*LINEChannel, error) {
 	if cfg.ChannelSecret == "" || cfg.ChannelAccessToken == "" {
 		return nil, fmt.Errorf("line channel_secret and channel_access_token are required")
 	}
@@ -64,6 +65,7 @@ func NewLINEChannel(cfg config.LINEConfig, messageBus *bus.MessageBus) (*LINECha
 	return &LINEChannel{
 		BaseChannel: base,
 		config:      cfg,
+		workspace:   workspace,
 	}, nil
 }
 
@@ -309,13 +311,16 @@ func (c *LINEChannel) processEvent(event lineEvent) {
 	var mediaPaths []string
 	localFiles := []string{}
 
+	// Only cleanup files if workspace is not set (i.e., files are in system temp dir)
 	defer func() {
-		for _, file := range localFiles {
-			if err := os.Remove(file); err != nil {
-				logger.DebugCF("line", "Failed to cleanup temp file", map[string]interface{}{
-					"file":  file,
-					"error": err.Error(),
-				})
+		if c.workspace == "" {
+			for _, file := range localFiles {
+				if err := os.Remove(file); err != nil {
+					logger.DebugCF("line", "Failed to cleanup temp file", map[string]interface{}{
+						"file":  file,
+						"error": err.Error(),
+					})
+				}
 			}
 		}
 	}()
@@ -594,5 +599,6 @@ func (c *LINEChannel) downloadContent(messageID, filename string) string {
 		ExtraHeaders: map[string]string{
 			"Authorization": "Bearer " + c.config.ChannelAccessToken,
 		},
+		TempDir: c.workspace,
 	})
 }

@@ -25,9 +25,10 @@ type DiscordChannel struct {
 	config      config.DiscordConfig
 	transcriber *voice.GroqTranscriber
 	ctx         context.Context
+	workspace   string
 }
 
-func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordChannel, error) {
+func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus, workspace string) (*DiscordChannel, error) {
 	session, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discord session: %w", err)
@@ -41,6 +42,7 @@ func NewDiscordChannel(cfg config.DiscordConfig, bus *bus.MessageBus) (*DiscordC
 		config:      cfg,
 		transcriber: nil,
 		ctx:         context.Background(),
+		workspace:   workspace,
 	}, nil
 }
 
@@ -159,13 +161,16 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 	localFiles := make([]string, 0, len(m.Attachments))
 
 	// 确保临时文件在函数返回时被清理
+	// NOTE: Only cleanup files if workspace is not set (i.e., files are in system temp dir)
 	defer func() {
-		for _, file := range localFiles {
-			if err := os.Remove(file); err != nil {
-				logger.DebugCF("discord", "Failed to cleanup temp file", map[string]any{
-					"file":  file,
-					"error": err.Error(),
-				})
+		if c.workspace == "" {
+			for _, file := range localFiles {
+				if err := os.Remove(file); err != nil {
+					logger.DebugCF("discord", "Failed to cleanup temp file", map[string]any{
+						"file":  file,
+						"error": err.Error(),
+					})
+				}
 			}
 		}
 	}()
@@ -244,5 +249,6 @@ func (c *DiscordChannel) handleMessage(s *discordgo.Session, m *discordgo.Messag
 func (c *DiscordChannel) downloadAttachment(url, filename string) string {
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "discord",
+		TempDir:      c.workspace,
 	})
 }

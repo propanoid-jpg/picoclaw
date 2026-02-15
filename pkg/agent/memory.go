@@ -131,18 +131,71 @@ func (ms *MemoryStore) GetRecentDailyNotes(days int) string {
 // GetMemoryContext returns formatted memory context for the agent prompt.
 // Includes long-term memory and recent daily notes.
 func (ms *MemoryStore) GetMemoryContext() string {
+	return ms.GetMemoryContextWithBudget(0) // No budget limit
+}
+
+// GetMemoryContextWithBudget returns formatted memory context within a token budget.
+// Strategy:
+//   - Priority 1: Recent daily notes (last 3 days)
+//   - Priority 2: Long-term memory (MEMORY.md), truncated if needed
+//   - If MEMORY.md exceeds budget, keep first 40% + last 40% (skip middle)
+func (ms *MemoryStore) GetMemoryContextWithBudget(maxTokens int) string {
 	var parts []string
+
+	// Recent daily notes (last 3 days) - highest priority
+	recentNotes := ms.GetRecentDailyNotes(3)
+	recentNotesTokens := estimateTokensInText(recentNotes)
 
 	// Long-term memory
 	longTerm := ms.ReadLongTerm()
-	if longTerm != "" {
-		parts = append(parts, "## Long-term Memory\n\n"+longTerm)
-	}
+	longTermTokens := estimateTokensInText(longTerm)
 
-	// Recent daily notes (last 3 days)
-	recentNotes := ms.GetRecentDailyNotes(3)
-	if recentNotes != "" {
-		parts = append(parts, "## Recent Daily Notes\n\n"+recentNotes)
+	// If no budget limit, return everything
+	if maxTokens == 0 {
+		if longTerm != "" {
+			parts = append(parts, "## Long-term Memory\n\n"+longTerm)
+		}
+		if recentNotes != "" {
+			parts = append(parts, "## Recent Daily Notes\n\n"+recentNotes)
+		}
+	} else {
+		// With budget: prioritize recent notes, truncate long-term memory if needed
+		remainingBudget := maxTokens
+
+		// Add recent notes first (they're more important)
+		if recentNotes != "" && recentNotesTokens <= remainingBudget {
+			parts = append(parts, "## Recent Daily Notes\n\n"+recentNotes)
+			remainingBudget -= recentNotesTokens
+		}
+
+		// Add long-term memory, truncating if necessary
+		if longTerm != "" {
+			if longTermTokens <= remainingBudget {
+				// Fits entirely
+				parts = append(parts, "## Long-term Memory\n\n"+longTerm)
+			} else if remainingBudget > 100 {
+				// Truncate: keep first 40% and last 40%, skip middle
+				// This preserves both old and new content
+				runes := []rune(longTerm)
+				totalRunes := len(runes)
+
+				// Calculate how many characters we can keep (roughly 4 chars per token)
+				maxChars := remainingBudget * 4
+				keepStart := (maxChars * 40) / 100
+				keepEnd := (maxChars * 40) / 100
+
+				if keepStart+keepEnd < totalRunes {
+					truncated := string(runes[:keepStart]) +
+						"\n\n[...middle section truncated to fit token budget...]\n\n" +
+						string(runes[totalRunes-keepEnd:])
+					parts = append(parts, "## Long-term Memory\n\n"+truncated)
+				} else {
+					// Just take what we can from the start
+					truncated := string(runes[:maxChars])
+					parts = append(parts, "## Long-term Memory\n\n"+truncated)
+				}
+			}
+		}
 	}
 
 	if len(parts) == 0 {

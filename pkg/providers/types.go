@@ -1,6 +1,9 @@
 package providers
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type ToolCall struct {
 	ID        string                 `json:"id"`
@@ -28,11 +31,56 @@ type UsageInfo struct {
 	TotalTokens      int `json:"total_tokens"`
 }
 
+// ContentBlock represents a piece of content (text or image)
+type ContentBlock struct {
+	Type      string            `json:"type"` // "text" or "image"
+	Text      string            `json:"text,omitempty"`
+	Source    *ImageSource      `json:"source,omitempty"`
+	MediaType string            `json:"media_type,omitempty"` // For image blocks
+}
+
+// ImageSource represents an image in a content block
+type ImageSource struct {
+	Type      string `json:"type"`       // "base64" or "url"
+	MediaType string `json:"media_type"` // e.g., "image/jpeg"
+	Data      string `json:"data"`       // base64-encoded image data
+}
+
+// MessageContent can be either a string or []ContentBlock
+type MessageContent interface{}
+
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role       string         `json:"role"`
+	Content    MessageContent `json:"content"` // Can be string or []ContentBlock
+	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+// GetTextContent extracts text content from a Message, handling both string and []ContentBlock types
+func (m *Message) GetTextContent() string {
+	switch v := m.Content.(type) {
+	case string:
+		return v
+	case []ContentBlock:
+		for _, block := range v {
+			if block.Type == "text" {
+				return block.Text
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+// MarshalJSON custom marshaler to handle MessageContent properly
+func (m Message) MarshalJSON() ([]byte, error) {
+	type Alias Message
+	return json.Marshal(&struct {
+		*Alias
+	}{
+		Alias: (*Alias)(&m),
+	})
 }
 
 type LLMProvider interface {

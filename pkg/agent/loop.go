@@ -16,7 +16,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
 	"github.com/sipeed/picoclaw/pkg/config"
@@ -37,6 +36,7 @@ type AgentLoop struct {
 	maxTokens      int     // Maximum output tokens per request
 	temperature    float64 // Temperature for LLM sampling
 	contextWindow  int     // Maximum context window size in tokens
+	contextBudget  *ContextBudget
 	maxIterations  int
 	sessions       *session.SessionManager
 	state          *state.Manager
@@ -44,18 +44,23 @@ type AgentLoop struct {
 	tools          *tools.ToolRegistry
 	running        atomic.Bool
 	summarizing    sync.Map // Tracks which sessions are currently being summarized
+
+	// Token estimation calibration (running average)
+	tokenCalibrationRatio atomic.Value // stores float64: actual_tokens / estimated_tokens
+	calibrationSamples    atomic.Int32  // number of samples used for calibration
 }
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey      string // Session identifier for history/context
-	Channel         string // Target channel for tool execution
-	ChatID          string // Target chat ID for tool execution
-	UserMessage     string // User message content (may include prefix)
-	DefaultResponse string // Response when LLM returns empty
-	EnableSummary   bool   // Whether to trigger summarization
-	SendResponse    bool   // Whether to send response via bus
-	NoHistory       bool   // If true, don't load session history (for heartbeat)
+	SessionKey      string   // Session identifier for history/context
+	Channel         string   // Target channel for tool execution
+	ChatID          string   // Target chat ID for tool execution
+	UserMessage     string   // User message content (may include prefix)
+	Media           []string // Media file paths (images, audio, etc.)
+	DefaultResponse string   // Response when LLM returns empty
+	EnableSummary   bool     // Whether to trigger summarization
+	SendResponse    bool     // Whether to send response via bus
+	NoHistory       bool     // If true, don't load session history (for heartbeat)
 }
 
 // createToolRegistry creates a tool registry with common tools.
@@ -136,6 +141,10 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	contextBuilder := NewContextBuilder(workspace)
 	contextBuilder.SetToolsRegistry(toolsRegistry)
 
+	contextWindow := cfg.GetContextWindowForModel()
+	contextBudget := NewContextBudget(contextWindow, cfg.Agents.Defaults.MaxTokens)
+	contextBuilder.SetBudget(contextBudget)
+
 	return &AgentLoop{
 		bus:            msgBus,
 		provider:       provider,
@@ -143,7 +152,8 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 		model:          cfg.Agents.Defaults.Model,
 		maxTokens:      cfg.Agents.Defaults.MaxTokens,
 		temperature:    cfg.Agents.Defaults.Temperature,
-		contextWindow:  cfg.Agents.Defaults.MaxTokens, // Restore context window for summarization
+		contextWindow:  contextWindow,
+		contextBudget:  contextBudget,
 		maxIterations:  cfg.Agents.Defaults.MaxToolIterations,
 		sessions:       sessionsManager,
 		state:          stateManager,
@@ -273,6 +283,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Channel:         msg.Channel,
 		ChatID:          msg.ChatID,
 		UserMessage:     msg.Content,
+		Media:           msg.Media,
 		DefaultResponse: "I've completed processing but have no response to give.",
 		EnableSummary:   true,
 		SendResponse:    false,
@@ -359,7 +370,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		history,
 		summary,
 		opts.UserMessage,
-		nil,
+		opts.Media,
 		opts.Channel,
 		opts.ChatID,
 	)
@@ -438,7 +449,7 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 				"tools_count":       len(providerToolDefs),
 				"max_tokens":        al.maxTokens,
 				"temperature":       al.temperature,
-				"system_prompt_len": len(messages[0].Content),
+				"system_prompt_len": len(messages[0].GetTextContent()),
 			})
 
 		// Log full messages (detailed)
@@ -451,8 +462,9 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 		// Call LLM
 		response, err := al.provider.Chat(ctx, messages, providerToolDefs, al.model, map[string]interface{}{
-			"max_tokens":  al.maxTokens,
-			"temperature": al.temperature,
+			"max_tokens":            al.maxTokens,
+			"temperature":           al.temperature,
+			"enable_prompt_caching": true, // Enable Anthropic prompt caching for cost reduction
 		})
 
 		if err != nil {
@@ -462,6 +474,62 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 					"error":     err.Error(),
 				})
 			return "", iteration, fmt.Errorf("LLM call failed: %w", err)
+		}
+
+		// Log token usage (actual vs estimated) and calibrate estimation
+		if response.Usage != nil {
+			estimated := al.estimateTokens(messages)
+			actual := response.Usage.PromptTokens
+
+			// Calculate error
+			diff := estimated - actual
+			errorPct := 0.0
+			if actual > 0 {
+				errorPct = (float64(diff) * 100.0) / float64(actual)
+			}
+
+			// Format error string (e.g., "+522 (+9.7%)" or "-200 (-5.2%)")
+			errorStr := ""
+			if diff > 0 {
+				errorStr = fmt.Sprintf("+%d (+%.1f%%)", diff, errorPct)
+			} else if diff < 0 {
+				errorStr = fmt.Sprintf("%d (%.1f%%)", diff, errorPct)
+			} else {
+				errorStr = "0 (exact)"
+			}
+
+			// Update calibration ratio (exponential moving average)
+			if estimated > 0 && actual > 0 {
+				ratio := float64(actual) / float64(estimated)
+
+				// Get current calibration ratio (default to 1.0)
+				currentRatio := 1.0
+				if val := al.tokenCalibrationRatio.Load(); val != nil {
+					currentRatio = val.(float64)
+				}
+
+				// Exponential moving average: new = 0.9 * old + 0.1 * new_sample
+				// This gives more weight to historical data but adapts to new patterns
+				samples := al.calibrationSamples.Load()
+				if samples == 0 {
+					// First sample, use it directly
+					al.tokenCalibrationRatio.Store(ratio)
+				} else {
+					// Weighted average
+					newRatio := 0.9*currentRatio + 0.1*ratio
+					al.tokenCalibrationRatio.Store(newRatio)
+				}
+				al.calibrationSamples.Add(1)
+			}
+
+			logger.InfoCF("agent", "Token usage",
+				map[string]interface{}{
+					"iteration":     iteration,
+					"prompt":        fmt.Sprintf("%d est / %d actual", estimated, actual),
+					"error":         errorStr,
+					"completion":    response.Usage.CompletionTokens,
+					"total":         response.Usage.TotalTokens,
+				})
 		}
 
 		// Check if no tool calls - we're done
@@ -595,13 +663,31 @@ func (al *AgentLoop) updateToolContexts(channel, chatID string) {
 }
 
 // maybeSummarize triggers summarization if the session history exceeds thresholds.
+// Uses accurate token counting and the context budget's history allocation.
+// Triggers proactively at 60% of history budget to avoid hitting limits.
 func (al *AgentLoop) maybeSummarize(sessionKey string) {
 	newHistory := al.sessions.GetHistory(sessionKey)
-	tokenEstimate := al.estimateTokens(newHistory)
-	threshold := al.contextWindow * 75 / 100
+	historyTokens := al.estimateTokens(newHistory)
 
-	if len(newHistory) > 20 || tokenEstimate > threshold {
+	// Use the context budget's summarization threshold (60% of history budget)
+	threshold := al.contextBudget.GetSummarizationThreshold()
+
+	logger.DebugCF("agent", "Checking if summarization needed",
+		map[string]interface{}{
+			"session_key":    sessionKey,
+			"history_tokens": historyTokens,
+			"threshold":      threshold,
+			"history_count":  len(newHistory),
+		})
+
+	if len(newHistory) > 20 || historyTokens > threshold {
 		if _, loading := al.summarizing.LoadOrStore(sessionKey, true); !loading {
+			logger.InfoCF("agent", "Triggering summarization",
+				map[string]interface{}{
+					"session_key":    sessionKey,
+					"history_tokens": historyTokens,
+					"threshold":      threshold,
+				})
 			go func() {
 				defer al.summarizing.Delete(sessionKey)
 				al.summarizeSession(sessionKey)
@@ -646,8 +732,8 @@ func formatMessagesForLog(messages []providers.Message) string {
 				}
 			}
 		}
-		if msg.Content != "" {
-			content := utils.Truncate(msg.Content, 200)
+		if msg.GetTextContent() != "" {
+			content := utils.Truncate(msg.GetTextContent(), 200)
 			result += fmt.Sprintf("  Content: %s\n", content)
 		}
 		if msg.ToolCallID != "" {
@@ -704,7 +790,7 @@ func (al *AgentLoop) summarizeSession(sessionKey string) {
 			continue
 		}
 		// Estimate tokens for this message
-		msgTokens := len(m.Content) / 4
+		msgTokens := len(m.GetTextContent()) / 4
 		if msgTokens > maxMessageTokens {
 			omitted = true
 			continue
@@ -775,13 +861,85 @@ func (al *AgentLoop) summarizeBatch(ctx context.Context, batch []providers.Messa
 }
 
 // estimateTokens estimates the number of tokens in a message list.
-// Uses rune count instead of byte length so that CJK and other multi-byte
-// characters are not over-counted (a Chinese character is 3 bytes but roughly
-// one token).
+// Uses a calibrated estimation based on actual API responses.
+// The base estimation is adjusted by a calibration ratio learned from
+// comparing estimates to actual token counts.
 func (al *AgentLoop) estimateTokens(messages []providers.Message) int {
 	total := 0
 	for _, m := range messages {
-		total += utf8.RuneCountInString(m.Content) / 3
+		content := m.GetTextContent()
+		total += estimateTokensInText(content)
+
+		// Add overhead for message structure (role, metadata, etc.)
+		total += 4 // Small fixed overhead per message
 	}
+
+	// Apply calibration ratio if available
+	if val := al.tokenCalibrationRatio.Load(); val != nil {
+		ratio := val.(float64)
+		// Apply calibration to improve accuracy based on historical data
+		total = int(float64(total) * ratio)
+	}
+
+	return total
+}
+
+// estimateTokensInText estimates tokens in a single text string.
+// Based on empirical testing, uses ~2.5 characters per token as a baseline,
+// which accounts for the token-dense nature of structured prompts, markdown,
+// and mixed content typical in system prompts.
+func estimateTokensInText(text string) int {
+	if text == "" {
+		return 0
+	}
+
+	// Count runes and classify them
+	totalRunes := 0
+	cjkRunes := 0
+
+	for _, r := range text {
+		totalRunes++
+
+		// Check if CJK character (Chinese, Japanese, Korean)
+		// Unicode ranges: 0x4E00-0x9FFF (CJK Unified)
+		//                 0x3040-0x309F (Hiragana)
+		//                 0x30A0-0x30FF (Katakana)
+		//                 0xAC00-0xD7AF (Hangul)
+		if (r >= 0x4E00 && r <= 0x9FFF) ||
+			(r >= 0x3040 && r <= 0x309F) ||
+			(r >= 0x30A0 && r <= 0x30FF) ||
+			(r >= 0xAC00 && r <= 0xD7AF) {
+			cjkRunes++
+		}
+	}
+
+	// Estimation strategy (calibrated from actual API usage):
+	// - CJK characters: ~1 token per character (denser semantic content)
+	// - Other characters: ~2.5 characters per token
+	//   (accounts for markdown, XML, structured text, English prose)
+	//
+	// This is more conservative than the typical "4 chars/token" rule of thumb
+	// because system prompts contain:
+	// - Markdown formatting (##, **, ---, etc.)
+	// - XML-like structures (<tool>, </tool>)
+	// - Structured lists and code
+	// - Mixed natural language and technical content
+
+	nonCJKRunes := totalRunes - cjkRunes
+
+	// CJK tokens: roughly 1 token per character
+	cjkTokens := cjkRunes
+
+	// Non-CJK tokens: 2.5 characters per token (more conservative than 4)
+	// Integer division: multiply by 2, divide by 5 to avoid floats
+	nonCJKTokens := (nonCJKRunes * 2) / 5
+
+	total := cjkTokens + nonCJKTokens
+
+	// Ensure minimum of 1 token for non-empty text
+	if total == 0 && len(text) > 0 {
+		return 1
+	}
+
 	return total
 }

@@ -29,6 +29,7 @@ type SlackChannel struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	pendingAcks  sync.Map
+	workspace    string
 }
 
 type slackMessageRef struct {
@@ -36,7 +37,7 @@ type slackMessageRef struct {
 	Timestamp string
 }
 
-func NewSlackChannel(cfg config.SlackConfig, messageBus *bus.MessageBus) (*SlackChannel, error) {
+func NewSlackChannel(cfg config.SlackConfig, messageBus *bus.MessageBus, workspace string) (*SlackChannel, error) {
 	if cfg.BotToken == "" || cfg.AppToken == "" {
 		return nil, fmt.Errorf("slack bot_token and app_token are required")
 	}
@@ -55,6 +56,7 @@ func NewSlackChannel(cfg config.SlackConfig, messageBus *bus.MessageBus) (*Slack
 		config:       cfg,
 		api:          api,
 		socketClient: socketClient,
+		workspace:    workspace,
 	}, nil
 }
 
@@ -233,13 +235,16 @@ func (c *SlackChannel) handleMessageEvent(ev *slackevents.MessageEvent) {
 	localFiles := []string{} // 跟踪需要清理的本地文件
 
 	// 确保临时文件在函数返回时被清理
+	// NOTE: Only cleanup files if workspace is not set (i.e., files are in system temp dir)
 	defer func() {
-		for _, file := range localFiles {
-			if err := os.Remove(file); err != nil {
-				logger.DebugCF("slack", "Failed to cleanup temp file", map[string]interface{}{
-					"file":  file,
-					"error": err.Error(),
-				})
+		if c.workspace == "" {
+			for _, file := range localFiles {
+				if err := os.Remove(file); err != nil {
+					logger.DebugCF("slack", "Failed to cleanup temp file", map[string]interface{}{
+						"file":  file,
+						"error": err.Error(),
+					})
+				}
 			}
 		}
 	}()
@@ -385,6 +390,7 @@ func (c *SlackChannel) downloadSlackFile(file slack.File) string {
 		ExtraHeaders: map[string]string{
 			"Authorization": "Bearer " + c.config.BotToken,
 		},
+		TempDir: c.workspace,
 	})
 }
 

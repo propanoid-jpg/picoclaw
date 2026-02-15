@@ -21,6 +21,7 @@ type Manager struct {
 	channels     map[string]Channel
 	bus          *bus.MessageBus
 	config       *config.Config
+	workspace    string
 	dispatchTask *asyncTask
 	mu           sync.RWMutex
 }
@@ -29,11 +30,12 @@ type asyncTask struct {
 	cancel context.CancelFunc
 }
 
-func NewManager(cfg *config.Config, messageBus *bus.MessageBus) (*Manager, error) {
+func NewManager(cfg *config.Config, messageBus *bus.MessageBus, workspace string) (*Manager, error) {
 	m := &Manager{
-		channels: make(map[string]Channel),
-		bus:      messageBus,
-		config:   cfg,
+		channels:  make(map[string]Channel),
+		bus:       messageBus,
+		config:    cfg,
+		workspace: workspace,
 	}
 
 	if err := m.initChannels(); err != nil {
@@ -48,7 +50,7 @@ func (m *Manager) initChannels() error {
 
 	if m.config.Channels.Telegram.Enabled && m.config.Channels.Telegram.Token != "" {
 		logger.DebugC("channels", "Attempting to initialize Telegram channel")
-		telegram, err := NewTelegramChannel(m.config.Channels.Telegram, m.bus)
+		telegram, err := NewTelegramChannel(m.config.Channels.Telegram, m.bus, m.workspace)
 		if err != nil {
 			logger.ErrorCF("channels", "Failed to initialize Telegram channel", map[string]interface{}{
 				"error": err.Error(),
@@ -87,7 +89,7 @@ func (m *Manager) initChannels() error {
 
 	if m.config.Channels.Discord.Enabled && m.config.Channels.Discord.Token != "" {
 		logger.DebugC("channels", "Attempting to initialize Discord channel")
-		discord, err := NewDiscordChannel(m.config.Channels.Discord, m.bus)
+		discord, err := NewDiscordChannel(m.config.Channels.Discord, m.bus, m.workspace)
 		if err != nil {
 			logger.ErrorCF("channels", "Failed to initialize Discord channel", map[string]interface{}{
 				"error": err.Error(),
@@ -139,7 +141,7 @@ func (m *Manager) initChannels() error {
 
 	if m.config.Channels.Slack.Enabled && m.config.Channels.Slack.BotToken != "" {
 		logger.DebugC("channels", "Attempting to initialize Slack channel")
-		slackCh, err := NewSlackChannel(m.config.Channels.Slack, m.bus)
+		slackCh, err := NewSlackChannel(m.config.Channels.Slack, m.bus, m.workspace)
 		if err != nil {
 			logger.ErrorCF("channels", "Failed to initialize Slack channel", map[string]interface{}{
 				"error": err.Error(),
@@ -152,7 +154,7 @@ func (m *Manager) initChannels() error {
 
 	if m.config.Channels.LINE.Enabled && m.config.Channels.LINE.ChannelAccessToken != "" {
 		logger.DebugC("channels", "Attempting to initialize LINE channel")
-		line, err := NewLINEChannel(m.config.Channels.LINE, m.bus)
+		line, err := NewLINEChannel(m.config.Channels.LINE, m.bus, m.workspace)
 		if err != nil {
 			logger.ErrorCF("channels", "Failed to initialize LINE channel", map[string]interface{}{
 				"error": err.Error(),

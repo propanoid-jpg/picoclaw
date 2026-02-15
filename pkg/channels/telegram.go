@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ type TelegramChannel struct {
 	transcriber  *voice.GroqTranscriber
 	placeholders sync.Map // chatID -> messageID
 	stopThinking sync.Map // chatID -> thinkingCancel
+	workspace    string   // Workspace directory for file downloads
 }
 
 type thinkingCancel struct {
@@ -41,7 +43,7 @@ func (c *thinkingCancel) Cancel() {
 	}
 }
 
-func NewTelegramChannel(cfg config.TelegramConfig, bus *bus.MessageBus) (*TelegramChannel, error) {
+func NewTelegramChannel(cfg config.TelegramConfig, bus *bus.MessageBus, workspace string) (*TelegramChannel, error) {
 	var opts []telego.BotOption
 
 	if cfg.Proxy != "" {
@@ -71,6 +73,7 @@ func NewTelegramChannel(cfg config.TelegramConfig, bus *bus.MessageBus) (*Telegr
 		transcriber:  nil,
 		placeholders: sync.Map{},
 		stopThinking: sync.Map{},
+		workspace:    workspace,
 	}, nil
 }
 
@@ -200,13 +203,17 @@ func (c *TelegramChannel) handleMessage(ctx context.Context, update telego.Updat
 	localFiles := []string{} // 跟踪需要清理的本地文件
 
 	// 确保临时文件在函数返回时被清理
+	// NOTE: Only cleanup files if workspace is not set (i.e., files are in system temp dir)
+	// When workspace is set, files are in workspace/tmp and will be cleaned up by agent
 	defer func() {
-		for _, file := range localFiles {
-			if err := os.Remove(file); err != nil {
-				logger.DebugCF("telegram", "Failed to cleanup temp file", map[string]interface{}{
-					"file":  file,
-					"error": err.Error(),
-				})
+		if c.workspace == "" {
+			for _, file := range localFiles {
+				if err := os.Remove(file); err != nil {
+					logger.DebugCF("telegram", "Failed to cleanup temp file", map[string]interface{}{
+						"file":  file,
+						"error": err.Error(),
+					})
+				}
 			}
 		}
 	}()
@@ -361,10 +368,17 @@ func (c *TelegramChannel) downloadFileWithInfo(file *telego.File, ext string) st
 	url := c.bot.FileDownloadURL(file.FilePath)
 	logger.DebugCF("telegram", "File URL", map[string]interface{}{"url": url})
 
-	// Use FilePath as filename for better identification
-	filename := file.FilePath + ext
+	// Use FilePath as filename - don't add extension if FilePath already has one
+	filename := file.FilePath
+	if filepath.Ext(filename) == "" && ext != "" {
+		filename += ext
+	}
+
+	// If workspace is set, use workspace/tmp for downloads (sandbox mode)
+	// Otherwise use OS temp dir
 	return utils.DownloadFile(url, filename, utils.DownloadOptions{
 		LoggerPrefix: "telegram",
+		TempDir:      c.workspace,
 	})
 }
 

@@ -71,11 +71,11 @@ func (p *ClaudeCliProvider) messagesToPrompt(messages []Message) string {
 		case "system":
 			// handled via --system-prompt flag
 		case "user":
-			parts = append(parts, "User: "+msg.Content)
+			parts = append(parts, "User: "+msg.GetTextContent())
 		case "assistant":
-			parts = append(parts, "Assistant: "+msg.Content)
+			parts = append(parts, "Assistant: "+msg.GetTextContent())
 		case "tool":
-			parts = append(parts, fmt.Sprintf("[Tool Result for %s]: %s", msg.ToolCallID, msg.Content))
+			parts = append(parts, fmt.Sprintf("[Tool Result for %s]: %s", msg.ToolCallID, msg.GetTextContent()))
 		}
 	}
 
@@ -93,7 +93,7 @@ func (p *ClaudeCliProvider) buildSystemPrompt(messages []Message, tools []ToolDe
 
 	for _, msg := range messages {
 		if msg.Role == "system" {
-			parts = append(parts, msg.Content)
+			parts = append(parts, msg.GetTextContent())
 		}
 	}
 

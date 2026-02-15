@@ -51,6 +51,7 @@ type DownloadOptions struct {
 	Timeout      time.Duration
 	ExtraHeaders map[string]string
 	LoggerPrefix string
+	TempDir      string // Optional custom temp directory (defaults to OS temp dir)
 }
 
 // DownloadFile downloads a file from URL to a local temp directory.
@@ -64,7 +65,15 @@ func DownloadFile(url, filename string, opts DownloadOptions) string {
 		opts.LoggerPrefix = "utils"
 	}
 
-	mediaDir := filepath.Join(os.TempDir(), "picoclaw_media")
+	// Use custom temp dir if provided (workspace mode), otherwise use OS temp dir
+	var mediaDir string
+	if opts.TempDir != "" {
+		// Workspace mode: baseDir/tmp/picoclaw_media
+		mediaDir = filepath.Join(opts.TempDir, "tmp", "picoclaw_media")
+	} else {
+		// Default mode: OS_TEMP_DIR/picoclaw_media
+		mediaDir = filepath.Join(os.TempDir(), "picoclaw_media")
+	}
 	if err := os.MkdirAll(mediaDir, 0700); err != nil {
 		logger.ErrorCF(opts.LoggerPrefix, "Failed to create media directory", map[string]interface{}{
 			"error": err.Error(),
@@ -74,7 +83,8 @@ func DownloadFile(url, filename string, opts DownloadOptions) string {
 
 	// Generate unique filename with UUID prefix to prevent conflicts
 	ext := filepath.Ext(filename)
-	safeName := SanitizeFilename(filename)
+	nameWithoutExt := strings.TrimSuffix(filename, ext)
+	safeName := SanitizeFilename(nameWithoutExt)
 	localPath := filepath.Join(mediaDir, uuid.New().String()[:8]+"_"+safeName+ext)
 
 	// Create HTTP request

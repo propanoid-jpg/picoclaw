@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/caarlos0/env/v11"
@@ -64,6 +65,7 @@ type AgentDefaults struct {
 	Provider            string  `json:"provider" env:"PICOCLAW_AGENTS_DEFAULTS_PROVIDER"`
 	Model               string  `json:"model" env:"PICOCLAW_AGENTS_DEFAULTS_MODEL"`
 	MaxTokens           int     `json:"max_tokens" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOKENS"`
+	ContextWindow       int     `json:"context_window" env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature         float64 `json:"temperature" env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations   int     `json:"max_tool_iterations" env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
 }
@@ -223,6 +225,7 @@ func DefaultConfig() *Config {
 				Provider:            "",
 				Model:               "glm-4.7",
 				MaxTokens:           8192,
+				ContextWindow:       128000, // Default context window, will be overridden based on model
 				Temperature:         0.7,
 				MaxToolIterations:   20,
 			},
@@ -438,4 +441,53 @@ func expandHome(path string) string {
 		return home
 	}
 	return path
+}
+
+// GetContextWindowForModel returns the appropriate context window size for a given model.
+// If the config already has a non-zero ContextWindow set, it returns that value.
+// Otherwise, it detects based on model name patterns.
+func (c *Config) GetContextWindowForModel() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	// If explicitly configured, use that value
+	if c.Agents.Defaults.ContextWindow > 0 {
+		return c.Agents.Defaults.ContextWindow
+	}
+
+	// Detect based on model name
+	model := strings.ToLower(c.Agents.Defaults.Model)
+
+	// Claude models
+	if strings.Contains(model, "claude") {
+		if strings.Contains(model, "opus") || strings.Contains(model, "sonnet") || strings.Contains(model, "haiku") {
+			return 200000 // Claude 3+ models have 200K context
+		}
+		return 100000 // Older Claude models
+	}
+
+	// GPT models
+	if strings.Contains(model, "gpt-4") {
+		if strings.Contains(model, "turbo") || strings.Contains(model, "1106") || strings.Contains(model, "0125") {
+			return 128000 // GPT-4 Turbo
+		}
+		return 8192 // Base GPT-4
+	}
+	if strings.Contains(model, "gpt-3.5") {
+		if strings.Contains(model, "16k") {
+			return 16384
+		}
+		return 4096
+	}
+
+	// Gemini models
+	if strings.Contains(model, "gemini") {
+		if strings.Contains(model, "1.5") {
+			return 1000000 // Gemini 1.5 has 1M context
+		}
+		return 32000
+	}
+
+	// Default for unknown models
+	return 128000
 }

@@ -75,30 +75,31 @@ func buildCodexParams(messages []Message, tools []ToolDefinition, model string, 
 	for _, msg := range messages {
 		switch msg.Role {
 		case "system":
-			instructions = msg.Content
+			instructions = msg.GetTextContent()
 		case "user":
 			if msg.ToolCallID != "" {
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 						CallID: msg.ToolCallID,
-						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.Opt(msg.Content)},
+						Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.Opt(msg.GetTextContent())},
 					},
 				})
 			} else {
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfMessage: &responses.EasyInputMessageParam{
 						Role:    responses.EasyInputMessageRoleUser,
-						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
+						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.GetTextContent())},
 					},
 				})
 			}
 		case "assistant":
 			if len(msg.ToolCalls) > 0 {
-				if msg.Content != "" {
+				textContent := msg.GetTextContent()
+				if textContent != "" {
 					inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 						OfMessage: &responses.EasyInputMessageParam{
 							Role:    responses.EasyInputMessageRoleAssistant,
-							Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
+							Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(textContent)},
 						},
 					})
 				}
@@ -116,7 +117,7 @@ func buildCodexParams(messages []Message, tools []ToolDefinition, model string, 
 				inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 					OfMessage: &responses.EasyInputMessageParam{
 						Role:    responses.EasyInputMessageRoleAssistant,
-						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.Content)},
+						Content: responses.EasyInputMessageContentUnionParam{OfString: openai.Opt(msg.GetTextContent())},
 					},
 				})
 			}
@@ -124,7 +125,7 @@ func buildCodexParams(messages []Message, tools []ToolDefinition, model string, 
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 					CallID: msg.ToolCallID,
-					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.Opt(msg.Content)},
+					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.Opt(msg.GetTextContent())},
 				},
 			})
 		}
