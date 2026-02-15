@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+
+	"github.com/sipeed/picoclaw/pkg/logger"
+	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
 type SendCallback func(channel, chatID, content string) error
@@ -12,6 +15,7 @@ type MessageTool struct {
 	defaultChannel string
 	defaultChatID  string
 	sentInRound    bool // Tracks whether a message was sent in the current processing round
+	disabled       bool // If true, Execute will not send messages (for heartbeat mode)
 }
 
 func NewMessageTool() *MessageTool {
@@ -53,6 +57,12 @@ func (t *MessageTool) SetContext(channel, chatID string) {
 	t.sentInRound = false // Reset send tracking for new processing round
 }
 
+// SetDisabled sets whether the message tool should actually send messages.
+// When disabled=true, Execute will log but not send (used for heartbeat mode).
+func (t *MessageTool) SetDisabled(disabled bool) {
+	t.disabled = disabled
+}
+
 // HasSentInRound returns true if the message tool sent a message during the current round.
 func (t *MessageTool) HasSentInRound() bool {
 	return t.sentInRound
@@ -84,6 +94,21 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]interface{}) 
 
 	if t.sendCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
+	}
+
+	// If disabled (heartbeat mode), log but don't send
+	if t.disabled {
+		logger.DebugCF("agent", "Message tool disabled (heartbeat mode)",
+			map[string]interface{}{
+				"channel": channel,
+				"chatID":  chatID,
+				"content": utils.Truncate(content, 100),
+			})
+		// Return success to LLM but don't actually send
+		return &ToolResult{
+			ForLLM: "Message suppressed (heartbeat mode - use spawn tool to communicate with user)",
+			Silent: true,
+		}
 	}
 
 	if err := t.sendCallback(channel, chatID, content); err != nil {

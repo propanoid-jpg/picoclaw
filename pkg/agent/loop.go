@@ -52,15 +52,16 @@ type AgentLoop struct {
 
 // processOptions configures how a message is processed
 type processOptions struct {
-	SessionKey      string   // Session identifier for history/context
-	Channel         string   // Target channel for tool execution
-	ChatID          string   // Target chat ID for tool execution
-	UserMessage     string   // User message content (may include prefix)
-	Media           []string // Media file paths (images, audio, etc.)
-	DefaultResponse string   // Response when LLM returns empty
-	EnableSummary   bool     // Whether to trigger summarization
-	SendResponse    bool     // Whether to send response via bus
-	NoHistory       bool     // If true, don't load session history (for heartbeat)
+	SessionKey         string   // Session identifier for history/context
+	Channel            string   // Target channel for tool execution
+	ChatID             string   // Target chat ID for tool execution
+	UserMessage        string   // User message content (may include prefix)
+	Media              []string // Media file paths (images, audio, etc.)
+	DefaultResponse    string   // Response when LLM returns empty
+	EnableSummary      bool     // Whether to trigger summarization
+	SendResponse       bool     // Whether to send response via bus
+	NoHistory          bool     // If true, don't load session history (for heartbeat)
+	DisableMessageTool bool     // If true, message tool won't send messages (for heartbeat)
 }
 
 // createToolRegistry creates a tool registry with common tools.
@@ -245,14 +246,15 @@ func (al *AgentLoop) ProcessDirectWithChannel(ctx context.Context, content, sess
 // Each heartbeat is independent and doesn't accumulate context.
 func (al *AgentLoop) ProcessHeartbeat(ctx context.Context, content, channel, chatID string) (string, error) {
 	return al.runAgentLoop(ctx, processOptions{
-		SessionKey:      "heartbeat",
-		Channel:         channel,
-		ChatID:          chatID,
-		UserMessage:     content,
-		DefaultResponse: "I've completed processing but have no response to give.",
-		EnableSummary:   false,
-		SendResponse:    false,
-		NoHistory:       true, // Don't load session history for heartbeat
+		SessionKey:         "heartbeat",
+		Channel:            channel,
+		ChatID:             chatID,
+		UserMessage:        content,
+		DefaultResponse:    "I've completed processing but have no response to give.",
+		EnableSummary:      false,
+		SendResponse:       false,
+		NoHistory:          true, // Don't load session history for heartbeat
+		DisableMessageTool: true, // Disable message tool - heartbeats should only communicate via subagents
 	})
 }
 
@@ -358,6 +360,19 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 
 	// 1. Update tool contexts
 	al.updateToolContexts(opts.Channel, opts.ChatID)
+
+	// 1.5. Disable message tool if requested (for heartbeat mode)
+	// During heartbeat, the agent should not send messages directly.
+	// Heartbeats should only communicate with users via spawned subagents.
+	if opts.DisableMessageTool {
+		if tool, ok := al.tools.Get("message"); ok {
+			if mt, ok := tool.(*tools.MessageTool); ok {
+				mt.SetDisabled(true)
+				// Ensure it's re-enabled after processing
+				defer mt.SetDisabled(false)
+			}
+		}
+	}
 
 	// 2. Build messages (skip history for heartbeat)
 	var history []providers.Message
