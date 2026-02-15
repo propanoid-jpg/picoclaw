@@ -32,9 +32,12 @@ type ContextCache struct {
 	skillsModTimes map[string]time.Time // skill file -> mod time for invalidation
 
 	// Tools summary cache
-	toolsSummary    string
-	toolsVersion    int // Increment when tools change
-	toolsRegistry   interface{} // Store reference to detect changes
+	toolsSummary  string
+	toolsVersion  int         // Increment when tools change
+	toolsRegistry interface{} // Store reference to detect changes
+
+	// Model tracking for cache invalidation
+	currentModel string
 
 	workspace string
 }
@@ -217,6 +220,35 @@ func (cc *ContextCache) InvalidateAll() {
 	cc.InvalidateTools()
 }
 
+// SetModel sets the current model and invalidates all caches if the model changed.
+// Returns true if the model changed and caches were invalidated.
+func (cc *ContextCache) SetModel(model string) bool {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+
+	// If model hasn't changed, nothing to do
+	if cc.currentModel == model {
+		return false
+	}
+
+	// Model changed - invalidate all caches
+	cc.currentModel = model
+	cc.bootstrapFiles = make(map[string]*CachedContent)
+	cc.skillsSummary = nil
+	cc.skillsModTimes = make(map[string]time.Time)
+	cc.toolsSummary = ""
+	cc.toolsVersion++
+
+	return true
+}
+
+// GetCurrentModel returns the current model name.
+func (cc *ContextCache) GetCurrentModel() string {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+	return cc.currentModel
+}
+
 // GetCacheStats returns cache statistics for debugging.
 func (cc *ContextCache) GetCacheStats() map[string]interface{} {
 	cc.mu.RLock()
@@ -227,5 +259,6 @@ func (cc *ContextCache) GetCacheStats() map[string]interface{} {
 		"skills_cached":          cc.skillsSummary != nil,
 		"tools_cached":           cc.toolsSummary != "",
 		"tools_version":          cc.toolsVersion,
+		"current_model":          cc.currentModel,
 	}
 }

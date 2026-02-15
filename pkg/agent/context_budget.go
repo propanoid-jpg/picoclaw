@@ -29,9 +29,9 @@ type ContextBudget struct {
 // - Output: From maxTokens config (typically 4096-8192)
 func NewContextBudget(contextWindow, maxTokens int) *ContextBudget {
 	// Allocate budgets
-	systemPromptBudget := contextWindow / 5                     // 20%
-	historyBudget := (contextWindow * 7) / 10                   // 70%
-	memoryBudget := systemPromptBudget / 2                      // Half of system prompt budget for memory
+	systemPromptBudget := contextWindow / 5   // 20%
+	historyBudget := (contextWindow * 7) / 10 // 70%
+	memoryBudget := systemPromptBudget / 2    // Half of system prompt budget for memory
 
 	return &ContextBudget{
 		contextWindow:      contextWindow,

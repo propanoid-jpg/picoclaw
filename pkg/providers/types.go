@@ -33,10 +33,10 @@ type UsageInfo struct {
 
 // ContentBlock represents a piece of content (text or image)
 type ContentBlock struct {
-	Type      string            `json:"type"` // "text" or "image"
-	Text      string            `json:"text,omitempty"`
-	Source    *ImageSource      `json:"source,omitempty"`
-	MediaType string            `json:"media_type,omitempty"` // For image blocks
+	Type      string       `json:"type"` // "text" or "image"
+	Text      string       `json:"text,omitempty"`
+	Source    *ImageSource `json:"source,omitempty"`
+	MediaType string       `json:"media_type,omitempty"` // For image blocks
 }
 
 // ImageSource represents an image in a content block

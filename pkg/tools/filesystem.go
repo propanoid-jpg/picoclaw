@@ -135,16 +135,30 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 		return ErrorResult(err.Error())
 	}
 
-	dir := filepath.Dir(resolvedPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to create directory: %v", err))
+	// Acquire file lock for thread-safe write
+	lockMgr := GetGlobalFileLockManager()
+	var result *ToolResult
+	lockErr := lockMgr.WithLock(resolvedPath, func() error {
+		dir := filepath.Dir(resolvedPath)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to create directory: %v", err))
+			return nil
+		}
+
+		if err := os.WriteFile(resolvedPath, []byte(content), 0644); err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to write file: %v", err))
+			return nil
+		}
+
+		result = SilentResult(fmt.Sprintf("File written: %s", path))
+		return nil
+	})
+
+	if lockErr != nil {
+		return ErrorResult(fmt.Sprintf("lock error: %v", lockErr))
 	}
 
-	if err := os.WriteFile(resolvedPath, []byte(content), 0644); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to write file: %v", err))
-	}
-
-	return SilentResult(fmt.Sprintf("File written: %s", path))
+	return result
 }
 
 type ListDirTool struct {

@@ -47,7 +47,7 @@ type AgentLoop struct {
 
 	// Token estimation calibration (running average)
 	tokenCalibrationRatio atomic.Value // stores float64: actual_tokens / estimated_tokens
-	calibrationSamples    atomic.Int32  // number of samples used for calibration
+	calibrationSamples    atomic.Int32 // number of samples used for calibration
 }
 
 // processOptions configures how a message is processed
@@ -145,6 +145,9 @@ func NewAgentLoop(cfg *config.Config, msgBus *bus.MessageBus, provider providers
 	contextWindow := cfg.GetContextWindowForModel()
 	contextBudget := NewContextBudget(contextWindow, cfg.Agents.Defaults.MaxTokens)
 	contextBuilder.SetBudget(contextBudget)
+
+	// Set initial model for cache tracking
+	contextBuilder.SetModel(cfg.Agents.Defaults.Model)
 
 	return &AgentLoop{
 		bus:            msgBus,
@@ -347,7 +350,10 @@ func (al *AgentLoop) processSystemMessage(ctx context.Context, msg bus.InboundMe
 // runAgentLoop is the core message processing logic.
 // It handles context building, LLM calls, tool execution, and response handling.
 func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (string, error) {
-	// 0. Record last channel for heartbeat notifications (skip internal channels)
+	// 0. Validate model and invalidate cache if model changed
+	al.contextBuilder.SetModel(al.model)
+
+	// 1. Record last channel for heartbeat notifications (skip internal channels)
 	if opts.Channel != "" && opts.ChatID != "" {
 		// Don't record internal channels (cli, system, subagent)
 		if !constants.IsInternalChannel(opts.Channel) {
@@ -358,10 +364,10 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		}
 	}
 
-	// 1. Update tool contexts
+	// 2. Update tool contexts
 	al.updateToolContexts(opts.Channel, opts.ChatID)
 
-	// 1.5. Disable message tool if requested (for heartbeat mode)
+	// 3. Disable message tool if requested (for heartbeat mode)
 	// During heartbeat, the agent should not send messages directly.
 	// Heartbeats should only communicate with users via spawned subagents.
 	if opts.DisableMessageTool {
@@ -374,7 +380,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		}
 	}
 
-	// 2. Build messages (skip history for heartbeat)
+	// 4. Build messages (skip history for heartbeat)
 	var history []providers.Message
 	var summary string
 	if !opts.NoHistory {
@@ -390,10 +396,10 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		opts.ChatID,
 	)
 
-	// 3. Save user message to session
+	// 5. Save user message to session
 	al.sessions.AddMessage(opts.SessionKey, "user", opts.UserMessage)
 
-	// 4. Run LLM iteration loop
+	// 6. Run LLM iteration loop
 	finalContent, iteration, err := al.runLLMIteration(ctx, messages, opts)
 	if err != nil {
 		return "", err
@@ -402,21 +408,21 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 	// If last tool had ForUser content and we already sent it, we might not need to send final response
 	// This is controlled by the tool's Silent flag and ForUser content
 
-	// 5. Handle empty response
+	// 7. Handle empty response
 	if finalContent == "" {
 		finalContent = opts.DefaultResponse
 	}
 
-	// 6. Save final assistant message to session
+	// 8. Save final assistant message to session
 	al.sessions.AddMessage(opts.SessionKey, "assistant", finalContent)
 	al.sessions.Save(opts.SessionKey)
 
-	// 7. Optional: summarization
+	// 9. Optional: summarization
 	if opts.EnableSummary {
 		al.maybeSummarize(opts.SessionKey)
 	}
 
-	// 8. Optional: send response via bus
+	// 10. Optional: send response via bus
 	if opts.SendResponse {
 		al.bus.PublishOutbound(bus.OutboundMessage{
 			Channel: opts.Channel,
@@ -425,7 +431,7 @@ func (al *AgentLoop) runAgentLoop(ctx context.Context, opts processOptions) (str
 		})
 	}
 
-	// 9. Log response
+	// 11. Log response
 	responsePreview := utils.Truncate(finalContent, 120)
 	logger.InfoCF("agent", fmt.Sprintf("Response: %s", responsePreview),
 		map[string]interface{}{
@@ -539,11 +545,11 @@ func (al *AgentLoop) runLLMIteration(ctx context.Context, messages []providers.M
 
 			logger.InfoCF("agent", "Token usage",
 				map[string]interface{}{
-					"iteration":     iteration,
-					"prompt":        fmt.Sprintf("%d est / %d actual", estimated, actual),
-					"error":         errorStr,
-					"completion":    response.Usage.CompletionTokens,
-					"total":         response.Usage.TotalTokens,
+					"iteration":  iteration,
+					"prompt":     fmt.Sprintf("%d est / %d actual", estimated, actual),
+					"error":      errorStr,
+					"completion": response.Usage.CompletionTokens,
+					"total":      response.Usage.TotalTokens,
 				})
 		}
 

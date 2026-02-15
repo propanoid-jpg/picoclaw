@@ -72,33 +72,50 @@ func (t *EditFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return ErrorResult(err.Error())
 	}
 
-	if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
-		return ErrorResult(fmt.Sprintf("file not found: %s", path))
+	// Acquire file lock for thread-safe read-modify-write
+	lockMgr := GetGlobalFileLockManager()
+	var result *ToolResult
+	lockErr := lockMgr.WithLock(resolvedPath, func() error {
+		if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
+			result = ErrorResult(fmt.Sprintf("file not found: %s", path))
+			return nil
+		}
+
+		content, err := os.ReadFile(resolvedPath)
+		if err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to read file: %v", err))
+			return nil
+		}
+
+		contentStr := string(content)
+
+		if !strings.Contains(contentStr, oldText) {
+			result = ErrorResult("old_text not found in file. Make sure it matches exactly")
+			return nil
+		}
+
+		count := strings.Count(contentStr, oldText)
+		if count > 1 {
+			result = ErrorResult(fmt.Sprintf("old_text appears %d times. Please provide more context to make it unique", count))
+			return nil
+		}
+
+		newContent := strings.Replace(contentStr, oldText, newText, 1)
+
+		if err := os.WriteFile(resolvedPath, []byte(newContent), 0644); err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to write file: %v", err))
+			return nil
+		}
+
+		result = SilentResult(fmt.Sprintf("File edited: %s", path))
+		return nil
+	})
+
+	if lockErr != nil {
+		return ErrorResult(fmt.Sprintf("lock error: %v", lockErr))
 	}
 
-	content, err := os.ReadFile(resolvedPath)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read file: %v", err))
-	}
-
-	contentStr := string(content)
-
-	if !strings.Contains(contentStr, oldText) {
-		return ErrorResult("old_text not found in file. Make sure it matches exactly")
-	}
-
-	count := strings.Count(contentStr, oldText)
-	if count > 1 {
-		return ErrorResult(fmt.Sprintf("old_text appears %d times. Please provide more context to make it unique", count))
-	}
-
-	newContent := strings.Replace(contentStr, oldText, newText, 1)
-
-	if err := os.WriteFile(resolvedPath, []byte(newContent), 0644); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to write file: %v", err))
-	}
-
-	return SilentResult(fmt.Sprintf("File edited: %s", path))
+	return result
 }
 
 type AppendFileTool struct {
@@ -151,15 +168,29 @@ func (t *AppendFileTool) Execute(ctx context.Context, args map[string]interface{
 		return ErrorResult(err.Error())
 	}
 
-	f, err := os.OpenFile(resolvedPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to open file: %v", err))
-	}
-	defer f.Close()
+	// Acquire file lock for thread-safe append
+	lockMgr := GetGlobalFileLockManager()
+	var result *ToolResult
+	lockErr := lockMgr.WithLock(resolvedPath, func() error {
+		f, err := os.OpenFile(resolvedPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to open file: %v", err))
+			return nil
+		}
+		defer f.Close()
 
-	if _, err := f.WriteString(content); err != nil {
-		return ErrorResult(fmt.Sprintf("failed to append to file: %v", err))
+		if _, err := f.WriteString(content); err != nil {
+			result = ErrorResult(fmt.Sprintf("failed to append to file: %v", err))
+			return nil
+		}
+
+		result = SilentResult(fmt.Sprintf("Appended to %s", path))
+		return nil
+	})
+
+	if lockErr != nil {
+		return ErrorResult(fmt.Sprintf("lock error: %v", lockErr))
 	}
 
-	return SilentResult(fmt.Sprintf("Appended to %s", path))
+	return result
 }

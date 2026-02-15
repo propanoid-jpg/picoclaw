@@ -57,6 +57,18 @@ func (cb *ContextBuilder) SetBudget(budget *ContextBudget) {
 	cb.budget = budget
 }
 
+// SetModel sets the current model and invalidates caches if the model changed.
+// Logs cache invalidation events for debugging.
+func (cb *ContextBuilder) SetModel(model string) {
+	invalidated := cb.cache.SetModel(model)
+	if invalidated {
+		logger.InfoCF("context", "Cache invalidated due to model change",
+			map[string]interface{}{
+				"new_model": model,
+			})
+	}
+}
+
 func (cb *ContextBuilder) getIdentity() string {
 	now := time.Now().Format("2006-01-02 15:04 (Monday)")
 	workspacePath, _ := filepath.Abs(filepath.Join(cb.workspace))

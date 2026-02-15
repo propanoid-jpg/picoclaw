@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 // MemoryStore manages persistent memory for the agent.
@@ -57,7 +59,10 @@ func (ms *MemoryStore) ReadLongTerm() string {
 
 // WriteLongTerm writes content to the long-term memory file (MEMORY.md).
 func (ms *MemoryStore) WriteLongTerm(content string) error {
-	return os.WriteFile(ms.memoryFile, []byte(content), 0644)
+	lockMgr := tools.GetGlobalFileLockManager()
+	return lockMgr.WithLock(ms.memoryFile, func() error {
+		return os.WriteFile(ms.memoryFile, []byte(content), 0644)
+	})
 }
 
 // ReadToday reads today's daily note.
@@ -75,26 +80,29 @@ func (ms *MemoryStore) ReadToday() string {
 func (ms *MemoryStore) AppendToday(content string) error {
 	todayFile := ms.getTodayFile()
 
-	// Ensure month directory exists
-	monthDir := filepath.Dir(todayFile)
-	os.MkdirAll(monthDir, 0755)
+	lockMgr := tools.GetGlobalFileLockManager()
+	return lockMgr.WithLock(todayFile, func() error {
+		// Ensure month directory exists
+		monthDir := filepath.Dir(todayFile)
+		os.MkdirAll(monthDir, 0755)
 
-	var existingContent string
-	if data, err := os.ReadFile(todayFile); err == nil {
-		existingContent = string(data)
-	}
+		var existingContent string
+		if data, err := os.ReadFile(todayFile); err == nil {
+			existingContent = string(data)
+		}
 
-	var newContent string
-	if existingContent == "" {
-		// Add header for new day
-		header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
-		newContent = header + content
-	} else {
-		// Append to existing content
-		newContent = existingContent + "\n" + content
-	}
+		var newContent string
+		if existingContent == "" {
+			// Add header for new day
+			header := fmt.Sprintf("# %s\n\n", time.Now().Format("2006-01-02"))
+			newContent = header + content
+		} else {
+			// Append to existing content
+			newContent = existingContent + "\n" + content
+		}
 
-	return os.WriteFile(todayFile, []byte(newContent), 0644)
+		return os.WriteFile(todayFile, []byte(newContent), 0644)
+	})
 }
 
 // GetRecentDailyNotes returns daily notes from the last N days.
